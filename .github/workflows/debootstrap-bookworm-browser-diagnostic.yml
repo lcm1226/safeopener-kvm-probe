@@ -1,0 +1,46 @@
+name: debootstrap-bookworm-browser-diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/debootstrap-bookworm-browser-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Reproduce candidate rootfs dependency closure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ROOT="$RUNNER_TEMP/debootstrap-bookworm-browser"
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq debootstrap
+          set +e
+          sudo debootstrap --arch=amd64 --variant=minbase \
+            --include=openssh-server,chromium,xvfb,x11vnc,python3,curl,ca-certificates,iproute2,procps,dbus-user-session \
+            bookworm "$ROOT" https://deb.debian.org/debian \
+            >"$RUNNER_TEMP/debootstrap.stdout.log" 2>&1
+          rc=$?
+          set -e
+          echo "DEBOOTSTRAP_RC=$rc"
+          if [ "$rc" -ne 0 ]; then
+            echo '--- outer tail ---'
+            tail -n 80 "$RUNNER_TEMP/debootstrap.stdout.log" || true
+            echo '--- inner relevant errors ---'
+            grep -E -B3 -A8 'dpkg: error|dependency problems|depends on|not installed|Errors were encountered' \
+              "$ROOT/debootstrap/debootstrap.log" | tail -n 240 || true
+            exit "$rc"
+          fi
+          test -x "$ROOT/usr/bin/chromium"
+          test -x "$ROOT/usr/bin/Xvfb"
+          test -x "$ROOT/usr/bin/x11vnc"
+          test -x "$ROOT/usr/sbin/sshd"
+          test -x "$ROOT/usr/bin/python3"
+          dpkg-query --root="$ROOT" -W -f='${Status}\n' dbus-user-session | grep -Fx 'install ok installed'
+          echo 'DEBOOTSTRAP_BROWSER_ROOTFS_PASS'
