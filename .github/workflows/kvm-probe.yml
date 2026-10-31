@@ -1,0 +1,56 @@
+name: kvm-capability-probe
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Probe runner KVM capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUNNER_OS=${RUNNER_OS:-unknown}"
+          echo "ARCH=$(uname -m)"
+          echo "KERNEL=$(uname -r)"
+          echo "CPU_COUNT=$(nproc)"
+          awk '/MemTotal:/ {print "MEM_TOTAL_KB=" $2}' /proc/meminfo
+          echo "VIRT_FLAG_COUNT=$(grep -Eom1 '\b(vmx|svm)\b' /proc/cpuinfo | wc -l)"
+          if sudo -n true; then
+            echo "SUDO_NONINTERACTIVE=PASS"
+          else
+            echo "SUDO_NONINTERACTIVE=FAIL"
+            exit 20
+          fi
+          if [ ! -e /dev/kvm ]; then
+            echo "KVM_DEVICE=ABSENT"
+            exit 21
+          fi
+          ls -l /dev/kvm
+          python3 - <<'PY'
+          import fcntl, os, stat
+          path = "/dev/kvm"
+          st = os.stat(path)
+          print(f"KVM_CHAR_DEVICE={'PASS' if stat.S_ISCHR(st.st_mode) else 'FAIL'}")
+          fd = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+          try:
+              api = fcntl.ioctl(fd, 0xAE00, 0)  # KVM_GET_API_VERSION
+              print(f"KVM_API_VERSION={api}")
+              if api != 12:
+                  raise SystemExit(22)
+              vmfd = fcntl.ioctl(fd, 0xAE01, 0)  # KVM_CREATE_VM
+              try:
+                  print("KVM_CREATE_VM=PASS")
+              finally:
+                  os.close(vmfd)
+          finally:
+              os.close(fd)
+          print("KVM_PROBE=PASS")
+          PY
