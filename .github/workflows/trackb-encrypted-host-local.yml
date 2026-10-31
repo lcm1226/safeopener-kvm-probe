@@ -14,23 +14,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
+      - name: Generate one-time runner key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          ROOT="$RUNNER_TEMP/so-trackb"
+          mkdir -p "$ROOT/in" "$ROOT/work" "$ROOT/result" "$ROOT/key-out"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
+            -out "$ROOT/runner-private.pem" >/dev/null 2>&1
+          openssl pkey -in "$ROOT/runner-private.pem" -pubout \
+            -out "$ROOT/key-out/runner-public.pem" >/dev/null 2>&1
+          printf '%s\n' "$GITHUB_RUN_ID" > "$ROOT/key-out/run-id.txt"
+          echo "RUNNER_KEY_READY"
+
+      - name: Publish one-time public key only
+        uses: actions/upload-artifact@v4
+        with:
+          name: trackb-runner-key-${{ github.run_id }}
+          path: ${{ runner.temp }}/so-trackb/key-out/
+          retention-days: 1
+
       - name: Run encrypted exact-head host-local campaign
         shell: bash
         run: |
           set -Eeuo pipefail
           umask 077
           ROOT="$RUNNER_TEMP/so-trackb"
-          mkdir -p "$ROOT/in" "$ROOT/work" "$ROOT/result"
-
-          # One-time runner key: only the public half is exposed. The private
-          # half dies with this ephemeral hosted runner.
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
-            -out "$ROOT/runner-private.pem" >/dev/null 2>&1
-          openssl pkey -in "$ROOT/runner-private.pem" -pubout \
-            -out "$ROOT/runner-public.pem" >/dev/null 2>&1
-          echo "PAYLOAD_RUN_ID=$GITHUB_RUN_ID"
-          echo "PAYLOAD_RSA_PUBLIC_B64=$(base64 -w0 "$ROOT/runner-public.pem")"
-
           BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/exchange/${GITHUB_RUN_ID}"
           echo "PAYLOAD_WAIT_BEGIN"
           found=0
