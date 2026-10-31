@@ -1,0 +1,170 @@
+name: external-flow-worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_id:
+        required: true
+        type: string
+      endpoint:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hold one existing WebSocket until off-host gateway cut
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id }}
+          ENDPOINT: ${{ inputs.endpoint }}
+        run: |
+          set -euo pipefail
+          [[ "$CAMPAIGN_ID" =~ ^[0-9]+$ ]]
+          [[ "$ENDPOINT" =~ ^https://[a-z0-9-]+\.trycloudflare\.com$ ]]
+          python3 - <<'PY'
+          import base64, hashlib, json, os, socket, ssl, struct, time, urllib.parse, urllib.request
+
+          token = os.environ['GH_TOKEN']
+          repo = os.environ['REPO']
+          campaign = os.environ['CAMPAIGN_ID']
+          endpoint = os.environ['ENDPOINT']
+          parsed = urllib.parse.urlparse(endpoint)
+          host = parsed.hostname
+          assert host and host.endswith('.trycloudflare.com')
+
+          def now_ms():
+              return time.time_ns() // 1_000_000
+
+          def put_state(kind, obj):
+              raw = json.dumps(obj, separators=(',', ':')).encode()
+              body = json.dumps({
+                  'message': f'runtime: {kind} {campaign}',
+                  'content': base64.b64encode(raw).decode(),
+                  'branch': 'runtime-state',
+              }).encode()
+              req = urllib.request.Request(
+                  f'https://api.github.com/repos/{repo}/contents/runtime/{kind}-{campaign}.json',
+                  data=body, method='PUT', headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'Content-Type': 'application/json',
+                  })
+              with urllib.request.urlopen(req, timeout=10) as r:
+                  if r.status != 201:
+                      raise RuntimeError(f'state_put_http_{r.status}')
+
+          def send_frame(sock, payload):
+              payload = payload.encode()
+              mask = os.urandom(4)
+              n = len(payload)
+              if n < 126:
+                  head = bytes([0x81, 0x80 | n])
+              elif n < 65536:
+                  head = bytes([0x81, 0x80 | 126]) + struct.pack('!H', n)
+              else:
+                  head = bytes([0x81, 0x80 | 127]) + struct.pack('!Q', n)
+              masked = bytes(v ^ mask[i % 4] for i, v in enumerate(payload))
+              sock.sendall(head + mask + masked)
+
+          def recv_exact(sock, n):
+              parts = []
+              left = n
+              while left:
+                  b = sock.recv(left)
+                  if not b:
+                      raise EOFError('socket_closed')
+                  parts.append(b)
+                  left -= len(b)
+              return b''.join(parts)
+
+          def recv_frame(sock):
+              b1, b2 = recv_exact(sock, 2)
+              opcode = b1 & 0x0f
+              n = b2 & 0x7f
+              if n == 126:
+                  n = struct.unpack('!H', recv_exact(sock, 2))[0]
+              elif n == 127:
+                  n = struct.unpack('!Q', recv_exact(sock, 8))[0]
+              masked = bool(b2 & 0x80)
+              mask = recv_exact(sock, 4) if masked else b''
+              payload = recv_exact(sock, n) if n else b''
+              if masked:
+                  payload = bytes(v ^ mask[i % 4] for i, v in enumerate(payload))
+              if opcode == 8:
+                  raise EOFError('websocket_close')
+              return opcode, payload
+
+          tcp = socket.create_connection((host, 443), timeout=10)
+          sock = ssl.create_default_context().wrap_socket(tcp, server_hostname=host)
+          sock.settimeout(5)
+          key = base64.b64encode(os.urandom(16)).decode()
+          request = (
+              f'GET /ws HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\n'
+              f'Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n'
+          ).encode()
+          sock.sendall(request)
+          header = b''
+          while b'\r\n\r\n' not in header and len(header) < 16384:
+              b = sock.recv(2048)
+              if not b:
+                  raise SystemExit('websocket_handshake_closed')
+              header += b
+          if not header.startswith(b'HTTP/1.1 101'):
+              raise SystemExit('websocket_handshake_failed:' + header[:160].decode(errors='replace'))
+          expected = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode().lower()
+          if f'sec-websocket-accept: {expected}'.encode() not in header.lower():
+              raise SystemExit('websocket_accept_mismatch')
+
+          established = now_ms()
+          pulses = 0
+          send_frame(sock, 'pulse-0')
+          opcode, payload = recv_frame(sock)
+          if opcode != 1 or payload != b'pulse-0':
+              raise SystemExit('initial_echo_mismatch')
+          pulses = 1
+          put_state('ready', {
+              'schemaVersion': 1, 'campaignId': campaign,
+              'workerRunId': os.environ['GITHUB_RUN_ID'],
+              'establishedAtMs': established, 'pulses': pulses,
+          })
+          print('EXISTING_FLOW_ESTABLISHED=PASS', flush=True)
+
+          deadline = time.monotonic() + 220
+          try:
+              while time.monotonic() < deadline:
+                  time.sleep(0.5)
+                  send_frame(sock, f'pulse-{pulses}')
+                  opcode, payload = recv_frame(sock)
+                  if opcode != 1:
+                      raise OSError('unexpected_opcode')
+                  pulses += 1
+              print('EXISTING_FLOW_NOT_CUT', flush=True)
+              raise SystemExit(70)
+          except (OSError, EOFError, ssl.SSLError, socket.timeout) as exc:
+              cut = now_ms()
+              if pulses < 2:
+                  raise SystemExit('flow_died_before_stability')
+              put_state('cut', {
+                  'schemaVersion': 1, 'campaignId': campaign,
+                  'workerRunId': os.environ['GITHUB_RUN_ID'],
+                  'establishedAtMs': established,
+                  'cutObservedAtMs': cut,
+                  'pulsesBeforeCut': pulses,
+                  'reasonClass': type(exc).__name__,
+              })
+              print(f'EXISTING_FLOW_CUT_OBSERVED=PASS pulses={pulses}', flush=True)
+          finally:
+              try:
+                  sock.close()
+              except Exception:
+                  pass
+          PY
