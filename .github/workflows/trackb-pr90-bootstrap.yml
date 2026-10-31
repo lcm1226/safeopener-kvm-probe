@@ -1,0 +1,94 @@
+name: trackb-pr90-bootstrap
+on:
+  push:
+    branches: ["diag/pr90-bootstrap-20261031"]
+    paths: [".github/workflows/trackb-pr90-bootstrap.yml"]
+permissions:
+  contents: read
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Prepare one-time runner key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          ROOT="$RUNNER_TEMP/so-pr90"
+          mkdir -p "$ROOT/in" "$ROOT/work" "$ROOT/out" "$ROOT/key"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$ROOT/runner-private.pem" >/dev/null 2>&1
+          openssl pkey -in "$ROOT/runner-private.pem" -pubout -out "$ROOT/key/runner-public.pem" >/dev/null 2>&1
+          printf '%s\n' "$GITHUB_RUN_ID" > "$ROOT/key/run-id.txt"
+          echo RUNNER_KEY_READY
+      - name: Publish one-time public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr90-runner-key-${{ github.run_id }}
+          path: ${{ runner.temp }}/so-pr90/key/
+          retention-days: 1
+      - name: Decrypt exact candidate and run bootstrap only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          ROOT="$RUNNER_TEMP/so-pr90"
+          BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/exchange/${GITHUB_RUN_ID}"
+          found=0
+          for _ in $(seq 1 120); do
+            if curl -fsS "$BASE/relay.tar.gz.enc.b64" -o "$ROOT/in/relay.tar.gz.enc.b64" && curl -fsS "$BASE/relay.pass.enc.b64" -o "$ROOT/in/relay.pass.enc.b64"; then found=1; break; fi
+            sleep 5
+          done
+          [[ "$found" == 1 ]] || { echo RELAY_WAIT_TIMEOUT; exit 70; }
+          base64 -d "$ROOT/in/relay.tar.gz.enc.b64" > "$ROOT/in/relay.tar.gz.enc"
+          base64 -d "$ROOT/in/relay.pass.enc.b64" > "$ROOT/in/relay.pass.enc"
+          openssl pkeyutl -decrypt -inkey "$ROOT/runner-private.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in "$ROOT/in/relay.pass.enc" -out "$ROOT/in/relay.pass"
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass file:"$ROOT/in/relay.pass" -in "$ROOT/in/relay.tar.gz.enc" -out "$ROOT/in/relay.tar.gz"
+          tar -xzf "$ROOT/in/relay.tar.gz" -C "$ROOT/in"
+          . "$ROOT/in/relay.env"
+          [[ "$PROOF_HEAD" =~ ^[0-9a-f]{40}$ && "$CAMPAIGN_SHA256" =~ ^[0-9a-f]{64}$ && "$PROXY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 71
+          echo "::add-mask::$PROOF_HEAD"
+          cp "$ROOT/in/trackb-firecracker-campaign.sh" "$ROOT/work/trackb-firecracker-campaign.sh"
+          cp "$ROOT/in/trackb-egress-proxy.py" "$ROOT/work/trackb-egress-proxy.py"
+          cd "$ROOT/work"
+          [[ "$(sha256sum trackb-firecracker-campaign.sh | awk '{print $1}')" == "$CAMPAIGN_SHA256" ]] || exit 72
+          [[ "$(sha256sum trackb-egress-proxy.py | awk '{print $1}')" == "$PROXY_SHA256" ]] || exit 73
+          bash -n trackb-firecracker-campaign.sh
+          python3 -m py_compile trackb-egress-proxy.py
+          chmod 700 trackb-firecracker-campaign.sh trackb-egress-proxy.py
+          sudo chmod 666 /dev/kvm
+          RUN_DIR="$ROOT/campaign"
+          set +e
+          SO_TRACKB_PROOF_HEAD="$PROOF_HEAD" SO_TRACKB_ALLOW_HOST_APT=1 SO_TRACKB_PACK_MAX=1 SO_TRACKB_RUN_DIR="$RUN_DIR" bash ./trackb-firecracker-campaign.sh bootstrap >"$ROOT/out/bootstrap.log" 2>&1
+          rc=$?
+          set -e
+          printf 'bootstrapRc=%s\n' "$rc" > "$ROOT/out/summary.txt"
+          if [[ "$rc" == 0 ]]; then echo BOOTSTRAP_PASS; else echo BOOTSTRAP_FAIL; fi
+          cat > "$ROOT/coordinator-public.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAqT7iAY8gbZZgE7pVhMoq
+          Xepdr1fsX5hiaIm8/P9rg1OC9kUz+GPHf3xAzHpdh0+BCJ45l9gxkLR7gotWr4lX
+          FOxbXANDc3KCYrv0Kgv/Gt30RoRtv9n9LpWhqfmwwy0F+NSeZRpZzhHoFpjKJ1r2
+          +v670SH0BjQM98tc2aFzGYc0Fa0BJefXpd8EE38xpcz8ErXp6N/dzaUYXcEllyk5
+          GVwdHp5BIC9uepiI9h3hKiu0vyYJmPtoEbgAXpV3kEgJKFCRqoQxzK9/X5SgPuou
+          JiN1ZSYpbR8R6P7QKHwc/gOYBk0bbjiy+Fckgs5W1qMtggB9qfocBI78aEiUq6Et
+          s7klDppsZiyqOynX66azqUc4kJg91EZar5CvqGXts/dfyw/DD0x2Ul1vpQ97rxzj
+          5+dxS6hCxz/1MHI5eKBQyXyU5hskwZ9RovCW0LsuRPlIf3lmnAF7wGmbxW845ROR
+          N43a66t/Q8JmIC4z0tXHFA2w+5odKp/k9Xx41K4SrsWXAgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
+          tar -czf "$ROOT/out.tar.gz" -C "$ROOT/out" .
+          openssl rand -hex 32 > "$ROOT/out.pass"
+          openssl enc -aes-256-cbc -pbkdf2 -pass file:"$ROOT/out.pass" -in "$ROOT/out.tar.gz" -out "$ROOT/out.tar.gz.enc"
+          openssl pkeyutl -encrypt -pubin -inkey "$ROOT/coordinator-public.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in "$ROOT/out.pass" -out "$ROOT/out.pass.enc"
+          exit "$rc"
+      - name: Upload encrypted diagnostic result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr90-bootstrap-result-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/so-pr90/out.tar.gz.enc
+            ${{ runner.temp }}/so-pr90/out.pass.enc
+          if-no-files-found: ignore
+          retention-days: 1
