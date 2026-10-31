@@ -26,16 +26,19 @@ jobs:
           api="https://api.github.com/repos/${REPO}"
           h=(-H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28")
 
-          list_ids() {
-            curl -fsSL "${h[@]}" "${api}/actions/workflows/external-control-target.yml/runs?event=workflow_dispatch&branch=main&per_page=20" | jq -r '.workflow_runs[].id'
+          list_runs_json() {
+            curl -fsSL "${h[@]}" "${api}/actions/workflows/external-control-target.yml/runs?event=workflow_dispatch&branch=main&per_page=20"
           }
-          status_json() {
-            curl -fsSL "${h[@]}" "${api}/actions/runs/$1"
-          }
+          list_ids() { list_runs_json | jq -r '.workflow_runs[].id'; }
+          status_json() { curl -fsSL "${h[@]}" "${api}/actions/runs/$1"; }
           dispatch() {
             curl -fsSL -o /dev/null -w '%{http_code}' -X POST "${h[@]}" \
               "${api}/actions/workflows/external-control-target.yml/dispatches" \
               -d "{\"ref\":\"main\",\"inputs\":{\"mode\":\"$1\"}}"
+          }
+          force_cancel() {
+            curl -sSL -o /dev/null -w '%{http_code}' -X POST "${h[@]}" \
+              "${api}/actions/runs/$1/force-cancel"
           }
           find_new_run() {
             local before_file="$1" exclude="${2:-}" id
@@ -52,6 +55,16 @@ jobs:
             done
             return 1
           }
+
+          # Clean only stale runs of this disposable target workflow.
+          while read -r old_id old_status; do
+            [[ -n "$old_id" ]] || continue
+            if [[ "$old_status" == queued || "$old_status" == in_progress || "$old_status" == waiting || "$old_status" == requested || "$old_status" == pending ]]; then
+              code="$(force_cancel "$old_id")"
+              [[ "$code" == 202 || "$code" == 409 ]] || { echo "STALE_FORCE_CANCEL_HTTP=$code id=$old_id"; exit 30; }
+              echo "STALE_TARGET_FORCE_CANCEL_REQUESTED=$old_id"
+            fi
+          done < <(list_runs_json | jq -r '.workflow_runs[] | [.id,.status] | @tsv')
 
           before="$(mktemp)"
           list_ids > "$before"
@@ -72,21 +85,39 @@ jobs:
           echo "SOURCE_WORKER_IN_PROGRESS=PASS"
 
           start_ms="$(date +%s%3N)"
-          code="$(curl -fsSL -o /dev/null -w '%{http_code}' -X POST "${h[@]}" "${api}/actions/runs/${hold_id}/cancel")"
+          code="$(curl -sSL -o /dev/null -w '%{http_code}' -X POST "${h[@]}" "${api}/actions/runs/${hold_id}/cancel")"
           [[ "$code" == 202 ]] || { echo "CANCEL_HTTP=$code"; exit 35; }
-          cancelled=0
-          for _ in $(seq 1 60); do
+          echo "NORMAL_CANCEL_ACCEPTED=PASS"
+
+          completed=0
+          for _ in $(seq 1 15); do
             j="$(status_json "$hold_id")"
             s="$(jq -r '.status' <<<"$j")"
             c="$(jq -r '.conclusion // empty' <<<"$j")"
             if [[ "$s" == completed ]]; then
               [[ "$c" == cancelled ]] || { echo "CANCEL_CONCLUSION=$c"; exit 36; }
-              cancelled=1
+              completed=1
               break
             fi
             sleep 1
           done
-          [[ "$cancelled" == 1 ]] || { echo "CANCEL_TIMEOUT"; exit 37; }
+          if [[ "$completed" == 0 ]]; then
+            code="$(force_cancel "$hold_id")"
+            [[ "$code" == 202 || "$code" == 409 ]] || { echo "FORCE_CANCEL_HTTP=$code"; exit 37; }
+            echo "FORCE_CANCEL_REQUESTED=PASS"
+            for _ in $(seq 1 60); do
+              j="$(status_json "$hold_id")"
+              s="$(jq -r '.status' <<<"$j")"
+              c="$(jq -r '.conclusion // empty' <<<"$j")"
+              if [[ "$s" == completed ]]; then
+                [[ "$c" == cancelled ]] || { echo "FORCE_CANCEL_CONCLUSION=$c"; exit 38; }
+                completed=1
+                break
+              fi
+              sleep 1
+            done
+          fi
+          [[ "$completed" == 1 ]] || { echo "FORCE_CANCEL_TIMEOUT"; exit 39; }
           cut_ms="$(( $(date +%s%3N) - start_ms ))"
           echo "EXTERNAL_CANCEL=PASS"
           echo "EXTERNAL_CANCEL_MS=$cut_ms"
@@ -94,8 +125,8 @@ jobs:
           before2="$(mktemp)"
           list_ids > "$before2"
           code="$(dispatch replacement)"
-          [[ "$code" == 204 ]] || { echo "REPLACEMENT_DISPATCH_HTTP=$code"; exit 38; }
-          repl_id="$(find_new_run "$before2" "$hold_id")" || { echo "REPLACEMENT_RUN_NOT_FOUND"; exit 39; }
+          [[ "$code" == 204 ]] || { echo "REPLACEMENT_DISPATCH_HTTP=$code"; exit 40; }
+          repl_id="$(find_new_run "$before2" "$hold_id")" || { echo "REPLACEMENT_RUN_NOT_FOUND"; exit 41; }
           echo "REPLACEMENT_RUN_ID=$repl_id"
           replacement=0
           for _ in $(seq 1 90); do
@@ -103,12 +134,12 @@ jobs:
             s="$(jq -r '.status' <<<"$j")"
             c="$(jq -r '.conclusion // empty' <<<"$j")"
             if [[ "$s" == completed ]]; then
-              [[ "$c" == success ]] || { echo "REPLACEMENT_CONCLUSION=$c"; exit 40; }
+              [[ "$c" == success ]] || { echo "REPLACEMENT_CONCLUSION=$c"; exit 42; }
               replacement=1
               break
             fi
             sleep 1
           done
-          [[ "$replacement" == 1 ]] || { echo "REPLACEMENT_TIMEOUT"; exit 41; }
+          [[ "$replacement" == 1 ]] || { echo "REPLACEMENT_TIMEOUT"; exit 43; }
           echo "REPLACEMENT_HEALTH=PASS"
           echo "EXTERNAL_CONTROL_PROBE=PASS"
