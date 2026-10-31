@@ -1,0 +1,170 @@
+name: external-flow-gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_id:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start pinned Quick Tunnel gateway
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id }}
+        run: |
+          set -euo pipefail
+          [[ "$CAMPAIGN_ID" =~ ^[0-9]+$ ]]
+          CLOUDFLARED_VERSION=2026.10.5
+          CLOUDFLARED_SHA=e1bc0cf084fd9e590554fe769a86b1db46701c3f847a43d902f7b974a4e16298
+          curl -fL --retry 3 --connect-timeout 10 \
+            "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" \
+            -o "$RUNNER_TEMP/cloudflared"
+          echo "$CLOUDFLARED_SHA  $RUNNER_TEMP/cloudflared" | sha256sum -c -
+          chmod 700 "$RUNNER_TEMP/cloudflared"
+
+          cat > "$RUNNER_TEMP/ws_origin.py" <<'PY'
+          import base64, hashlib, json, socket, struct, threading
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+          lock = threading.Lock()
+          active = 0
+          total = 0
+
+          def send_frame(conn, opcode, payload=b''):
+              n = len(payload)
+              if n < 126:
+                  head = bytes([0x80 | opcode, n])
+              elif n < 65536:
+                  head = bytes([0x80 | opcode, 126]) + struct.pack('!H', n)
+              else:
+                  head = bytes([0x80 | opcode, 127]) + struct.pack('!Q', n)
+              conn.sendall(head + payload)
+
+          def recv_exact(rfile, n):
+              b = rfile.read(n)
+              if b is None or len(b) != n:
+                  raise EOFError('short_read')
+              return b
+
+          class H(BaseHTTPRequestHandler):
+              protocol_version = 'HTTP/1.1'
+              def log_message(self, *_):
+                  return
+              def do_GET(self):
+                  global active, total
+                  if self.path == '/status':
+                      with lock:
+                          body = json.dumps({'active': active, 'total': total}, separators=(',', ':')).encode()
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/json')
+                      self.send_header('Content-Length', str(len(body)))
+                      self.end_headers()
+                      self.wfile.write(body)
+                      return
+                  if self.path != '/ws' or self.headers.get('Upgrade', '').lower() != 'websocket':
+                      body = b'not-found'
+                      self.send_response(404)
+                      self.send_header('Content-Length', str(len(body)))
+                      self.end_headers()
+                      self.wfile.write(body)
+                      return
+                  key = self.headers.get('Sec-WebSocket-Key')
+                  if not key:
+                      self.send_error(400)
+                      return
+                  accept = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
+                  self.send_response(101, 'Switching Protocols')
+                  self.send_header('Upgrade', 'websocket')
+                  self.send_header('Connection', 'Upgrade')
+                  self.send_header('Sec-WebSocket-Accept', accept)
+                  self.end_headers()
+                  self.wfile.flush()
+                  with lock:
+                      active += 1
+                      total += 1
+                  try:
+                      self.connection.settimeout(10)
+                      while True:
+                          h = recv_exact(self.rfile, 2)
+                          b1, b2 = h[0], h[1]
+                          opcode = b1 & 0x0f
+                          n = b2 & 0x7f
+                          if n == 126:
+                              n = struct.unpack('!H', recv_exact(self.rfile, 2))[0]
+                          elif n == 127:
+                              n = struct.unpack('!Q', recv_exact(self.rfile, 8))[0]
+                          masked = bool(b2 & 0x80)
+                          mask = recv_exact(self.rfile, 4) if masked else b''
+                          payload = recv_exact(self.rfile, n) if n else b''
+                          if masked:
+                              payload = bytes(v ^ mask[i % 4] for i, v in enumerate(payload))
+                          if opcode == 8:
+                              send_frame(self.connection, 8, payload)
+                              break
+                          if opcode == 9:
+                              send_frame(self.connection, 10, payload)
+                          elif opcode in (1, 2):
+                              send_frame(self.connection, opcode, payload)
+                  except (EOFError, OSError, socket.timeout):
+                      pass
+                  finally:
+                      with lock:
+                          active -= 1
+
+          ThreadingHTTPServer(('127.0.0.1', 18080), H).serve_forever()
+          PY
+
+          python3 "$RUNNER_TEMP/ws_origin.py" >"$RUNNER_TEMP/origin.log" 2>&1 &
+          origin_pid=$!
+          trap 'kill "$origin_pid" 2>/dev/null || true; kill "${cf_pid:-}" 2>/dev/null || true' EXIT INT TERM
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18080/status >/dev/null && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18080/status >/dev/null
+
+          "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --url http://127.0.0.1:18080 \
+            >"$RUNNER_TEMP/cloudflared.log" 2>&1 &
+          cf_pid=$!
+          endpoint=''
+          for _ in $(seq 1 120); do
+            endpoint="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$RUNNER_TEMP/cloudflared.log" | head -1 || true)"
+            [[ -n "$endpoint" ]] && break
+            kill -0 "$cf_pid" 2>/dev/null || { cat "$RUNNER_TEMP/cloudflared.log"; exit 21; }
+            sleep 0.5
+          done
+          [[ "$endpoint" =~ ^https://[a-z0-9-]+\.trycloudflare\.com$ ]] || { cat "$RUNNER_TEMP/cloudflared.log"; exit 22; }
+          for _ in $(seq 1 60); do
+            curl -fsS "$endpoint/status" >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+          curl -fsS "$endpoint/status" >/dev/null
+          echo "QUICK_TUNNEL_READY=PASS"
+
+          state="$(jq -nc --arg endpoint "$endpoint" --arg runId "$GITHUB_RUN_ID" --arg campaign "$CAMPAIGN_ID" \
+            '{schemaVersion:1,campaignId:$campaign,gatewayRunId:$runId,endpoint:$endpoint}')"
+          encoded="$(printf '%s' "$state" | base64 -w0)"
+          body="$(jq -nc --arg message "runtime: gateway $CAMPAIGN_ID" --arg content "$encoded" --arg branch runtime-state \
+            '{message:$message,content:$content,branch:$branch}')"
+          code="$(curl -sS -o "$RUNNER_TEMP/state-put.out" -w '%{http_code}' -X PUT \
+            -H 'Accept: application/vnd.github+json' -H "Authorization: Bearer $GH_TOKEN" -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$REPO/contents/runtime/gateway-${CAMPAIGN_ID}.json" -d "$body")"
+          [[ "$code" == 201 ]] || { cat "$RUNNER_TEMP/state-put.out"; echo "STATE_PUT_HTTP=$code"; exit 23; }
+          echo "GATEWAY_STATE_PUBLISHED=PASS"
+          echo "GATEWAY_HOLDING_FOR_EXTERNAL_CUT"
+          for i in $(seq 1 240); do
+            kill -0 "$cf_pid" 2>/dev/null || { echo 'CLOUDFLARED_DIED_EARLY'; exit 24; }
+            sleep 1
+          done
+          echo "GATEWAY_NOT_EXTERNALLY_CANCELLED"
+          exit 70
