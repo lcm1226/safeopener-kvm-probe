@@ -1,0 +1,143 @@
+name: trackb-encrypted-host-local
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/trackb-encrypted-host-local.yml
+
+permissions:
+  contents: read
+
+jobs:
+  host-local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Run encrypted exact-head host-local campaign
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          ROOT="$RUNNER_TEMP/so-trackb"
+          mkdir -p "$ROOT/in" "$ROOT/work" "$ROOT/result"
+
+          # One-time runner key: only the public half is exposed. The private
+          # half dies with this ephemeral hosted runner.
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 \
+            -out "$ROOT/runner-private.pem" >/dev/null 2>&1
+          openssl pkey -in "$ROOT/runner-private.pem" -pubout \
+            -out "$ROOT/runner-public.pem" >/dev/null 2>&1
+          echo "PAYLOAD_RUN_ID=$GITHUB_RUN_ID"
+          echo "PAYLOAD_RSA_PUBLIC_B64=$(base64 -w0 "$ROOT/runner-public.pem")"
+
+          BASE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/exchange/${GITHUB_RUN_ID}"
+          echo "PAYLOAD_WAIT_BEGIN"
+          found=0
+          for _ in $(seq 1 120); do
+            if curl -fsS "$BASE/payload.tar.gz.enc.b64" -o "$ROOT/in/payload.tar.gz.enc.b64" \
+              && curl -fsS "$BASE/payload.pass.enc.b64" -o "$ROOT/in/payload.pass.enc.b64"; then
+              found=1
+              break
+            fi
+            sleep 5
+          done
+          [[ "$found" == 1 ]] || { echo "PAYLOAD_WAIT_TIMEOUT"; exit 70; }
+          echo "PAYLOAD_RECEIVED"
+
+          base64 -d "$ROOT/in/payload.tar.gz.enc.b64" > "$ROOT/in/payload.tar.gz.enc"
+          base64 -d "$ROOT/in/payload.pass.enc.b64" > "$ROOT/in/payload.pass.enc"
+          openssl pkeyutl -decrypt -inkey "$ROOT/runner-private.pem" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -in "$ROOT/in/payload.pass.enc" -out "$ROOT/in/payload.pass"
+          openssl enc -d -aes-256-cbc -pbkdf2 \
+            -pass file:"$ROOT/in/payload.pass" \
+            -in "$ROOT/in/payload.tar.gz.enc" -out "$ROOT/in/payload.tar.gz"
+          tar -xzf "$ROOT/in/payload.tar.gz" -C "$ROOT/work"
+
+          cd "$ROOT/work"
+          test -f meta.env
+          test -f trackb-firecracker-campaign.sh
+          test -f trackb-egress-proxy.py
+          # shellcheck disable=SC1091
+          . ./meta.env
+          [[ "$PROOF_HEAD" =~ ^[0-9a-f]{40}$ ]] || exit 71
+          echo "::add-mask::$PROOF_HEAD"
+          [[ "$(sha256sum trackb-firecracker-campaign.sh | awk '{print $1}')" == "$CAMPAIGN_SHA256" ]] || exit 72
+          [[ "$(sha256sum trackb-egress-proxy.py | awk '{print $1}')" == "$PROXY_SHA256" ]] || exit 73
+          echo "PAYLOAD_VERIFIED"
+
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          df -h "$RUNNER_TEMP" | tail -1 | awk '{print "DISK_BEFORE_FREE=" $4}'
+
+          RUN_DIR="$ROOT/campaign"
+          set +e
+          SO_TRACKB_PROOF_HEAD="$PROOF_HEAD" \
+          SO_TRACKB_ALLOW_HOST_APT=1 \
+          SO_TRACKB_PACK_MAX=1 \
+          SO_TRACKB_RUN_DIR="$RUN_DIR" \
+            bash ./trackb-firecracker-campaign.sh run \
+            >"$ROOT/result/campaign.log" 2>&1
+          CAMPAIGN_RC=$?
+          set -e
+
+          printf 'campaignRc=%s\n' "$CAMPAIGN_RC" > "$ROOT/result/summary.txt"
+          if [ -f "$RUN_DIR/output/trackb-observation.json" ]; then
+            cp "$RUN_DIR/output/trackb-observation.json" "$ROOT/result/trackb-observation.json"
+            sha256sum "$ROOT/result/trackb-observation.json" > "$ROOT/result/trackb-observation.sha256"
+          fi
+          if [ -d "$RUN_DIR/state" ]; then
+            tar -czf "$ROOT/result/state.tar.gz" -C "$RUN_DIR" state
+          fi
+          if [ -d "$RUN_DIR/logs" ]; then
+            find "$RUN_DIR/logs" -type f -size -2M -print0 \
+              | tar --null -T - -czf "$ROOT/result/logs-small.tar.gz" 2>/dev/null || true
+          fi
+          if ip -o link show | grep -q 'sotb'; then
+            echo 'tapCleanupZero=false' >> "$ROOT/result/summary.txt"
+          else
+            echo 'tapCleanupZero=true' >> "$ROOT/result/summary.txt"
+          fi
+          if sudo nft list table inet safeopener_trackb >/dev/null 2>&1; then
+            echo 'nftCleanupZero=false' >> "$ROOT/result/summary.txt"
+          else
+            echo 'nftCleanupZero=true' >> "$ROOT/result/summary.txt"
+          fi
+          df -h "$RUNNER_TEMP" | tail -1 | awk '{print "DISK_AFTER_FREE=" $4}' >> "$ROOT/result/summary.txt"
+
+          cat > "$ROOT/coordinator-public.pem" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAqT7iAY8gbZZgE7pVhMoq
+          Xepdr1fsX5hiaIm8/P9rg1OC9kUz+GPHf3xAzHpdh0+BCJ45l9gxkLR7gotWr4lX
+          FOxbXANDc3KCYrv0Kgv/Gt30RoRtv9n9LpWhqfmwwy0F+NSeZRpZzhHoFpjKJ1r2
+          +v670SH0BjQM98tc2aFzGYc0Fa0BJefXpd8EE38xpcz8ErXp6N/dzaUYXcEllyk5
+          GVwdHp5BIC9uepiI9h3hKiu0vyYJmPtoEbgAXpV3kEgJKFCRqoQxzK9/X5SgPuou
+          JiN1ZSYpbR8R6P7QKHwc/gOYBk0bbjiy+Fckgs5W1qMtggB9qfocBI78aEiUq6Et
+          s7klDppsZiyqOynX66azqUc4kJg91EZar5CvqGXts/dfyw/DD0x2Ul1vpQ97rxzj
+          5+dxS6hCxz/1MHI5eKBQyXyU5hskwZ9RovCW0LsuRPlIf3lmnAF7wGmbxW845ROR
+          N43a66t/Q8JmIC4z0tXHFA2w+5odKp/k9Xx41K4SrsWXAgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
+
+          tar -czf "$ROOT/result.tar.gz" -C "$ROOT/result" .
+          openssl rand -hex 32 > "$ROOT/result.pass"
+          openssl enc -aes-256-cbc -pbkdf2 \
+            -pass file:"$ROOT/result.pass" \
+            -in "$ROOT/result.tar.gz" -out "$ROOT/result.tar.gz.enc"
+          openssl pkeyutl -encrypt -pubin -inkey "$ROOT/coordinator-public.pem" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -in "$ROOT/result.pass" -out "$ROOT/result.pass.enc"
+          echo "RESULT_ENCRYPTED"
+          exit "$CAMPAIGN_RC"
+
+      - name: Upload encrypted result only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trackb-encrypted-result-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/so-trackb/result.tar.gz.enc
+            ${{ runner.temp }}/so-trackb/result.pass.enc
+          if-no-files-found: ignore
+          retention-days: 1
