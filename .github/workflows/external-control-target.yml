@@ -1,0 +1,49 @@
+name: external-control-target
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: hold or replacement
+        required: true
+        type: choice
+        options:
+          - hold
+          - replacement
+
+permissions:
+  contents: read
+
+jobs:
+  target:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Report target identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "TARGET_RUN_ID=${GITHUB_RUN_ID}"
+          echo "TARGET_MODE=${{ inputs.mode }}"
+          echo "TARGET_HOST=$(hostname)"
+          echo "TARGET_KERNEL=$(uname -r)"
+      - name: Hold source worker for external cancellation
+        if: inputs.mode == 'hold'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SOURCE_WORKER_READY_FOR_EXTERNAL_CANCEL"
+          for i in $(seq 1 180); do
+            echo "SOURCE_HEARTBEAT=$i"
+            sleep 1
+          done
+          echo "SOURCE_WORKER_NOT_CANCELLED"
+          exit 70
+      - name: Replacement health
+        if: inputs.mode == 'replacement'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(nproc)" -ge 1
+          sudo -n true
+          echo "REPLACEMENT_HEALTH=PASS"

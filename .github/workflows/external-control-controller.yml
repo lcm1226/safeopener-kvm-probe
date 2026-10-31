@@ -1,0 +1,114 @@
+name: external-control-controller
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/external-control-controller.yml
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Prove external cancel and replacement
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPO}"
+          h=(-H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28")
+
+          list_ids() {
+            curl -fsSL "${h[@]}" "${api}/actions/workflows/external-control-target.yml/runs?event=workflow_dispatch&branch=main&per_page=20" | jq -r '.workflow_runs[].id'
+          }
+          status_json() {
+            curl -fsSL "${h[@]}" "${api}/actions/runs/$1"
+          }
+          dispatch() {
+            curl -fsSL -o /dev/null -w '%{http_code}' -X POST "${h[@]}" \
+              "${api}/actions/workflows/external-control-target.yml/dispatches" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"mode\":\"$1\"}}"
+          }
+          find_new_run() {
+            local before_file="$1" exclude="${2:-}" id
+            for _ in $(seq 1 30); do
+              while read -r id; do
+                [[ -n "$id" ]] || continue
+                [[ "$id" == "$exclude" ]] && continue
+                if ! grep -Fxq "$id" "$before_file"; then
+                  echo "$id"
+                  return 0
+                fi
+              done < <(list_ids)
+              sleep 1
+            done
+            return 1
+          }
+
+          before="$(mktemp)"
+          list_ids > "$before"
+          code="$(dispatch hold)"
+          [[ "$code" == 204 ]] || { echo "HOLD_DISPATCH_HTTP=$code"; exit 31; }
+          hold_id="$(find_new_run "$before")" || { echo "HOLD_RUN_NOT_FOUND"; exit 32; }
+          echo "HOLD_RUN_ID=$hold_id"
+
+          ready=0
+          for _ in $(seq 1 60); do
+            j="$(status_json "$hold_id")"
+            s="$(jq -r '.status' <<<"$j")"
+            if [[ "$s" == in_progress ]]; then ready=1; break; fi
+            [[ "$s" == completed ]] && { echo "HOLD_COMPLETED_EARLY"; exit 33; }
+            sleep 1
+          done
+          [[ "$ready" == 1 ]] || { echo "HOLD_NOT_IN_PROGRESS"; exit 34; }
+          echo "SOURCE_WORKER_IN_PROGRESS=PASS"
+
+          start_ms="$(date +%s%3N)"
+          code="$(curl -fsSL -o /dev/null -w '%{http_code}' -X POST "${h[@]}" "${api}/actions/runs/${hold_id}/cancel")"
+          [[ "$code" == 202 ]] || { echo "CANCEL_HTTP=$code"; exit 35; }
+          cancelled=0
+          for _ in $(seq 1 60); do
+            j="$(status_json "$hold_id")"
+            s="$(jq -r '.status' <<<"$j")"
+            c="$(jq -r '.conclusion // empty' <<<"$j")"
+            if [[ "$s" == completed ]]; then
+              [[ "$c" == cancelled ]] || { echo "CANCEL_CONCLUSION=$c"; exit 36; }
+              cancelled=1
+              break
+            fi
+            sleep 1
+          done
+          [[ "$cancelled" == 1 ]] || { echo "CANCEL_TIMEOUT"; exit 37; }
+          cut_ms="$(( $(date +%s%3N) - start_ms ))"
+          echo "EXTERNAL_CANCEL=PASS"
+          echo "EXTERNAL_CANCEL_MS=$cut_ms"
+
+          before2="$(mktemp)"
+          list_ids > "$before2"
+          code="$(dispatch replacement)"
+          [[ "$code" == 204 ]] || { echo "REPLACEMENT_DISPATCH_HTTP=$code"; exit 38; }
+          repl_id="$(find_new_run "$before2" "$hold_id")" || { echo "REPLACEMENT_RUN_NOT_FOUND"; exit 39; }
+          echo "REPLACEMENT_RUN_ID=$repl_id"
+          replacement=0
+          for _ in $(seq 1 90); do
+            j="$(status_json "$repl_id")"
+            s="$(jq -r '.status' <<<"$j")"
+            c="$(jq -r '.conclusion // empty' <<<"$j")"
+            if [[ "$s" == completed ]]; then
+              [[ "$c" == success ]] || { echo "REPLACEMENT_CONCLUSION=$c"; exit 40; }
+              replacement=1
+              break
+            fi
+            sleep 1
+          done
+          [[ "$replacement" == 1 ]] || { echo "REPLACEMENT_TIMEOUT"; exit 41; }
+          echo "REPLACEMENT_HEALTH=PASS"
+          echo "EXTERNAL_CONTROL_PROBE=PASS"
