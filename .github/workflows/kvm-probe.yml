@@ -34,7 +34,7 @@ jobs:
             exit 21
           fi
           ls -l /dev/kvm
-          python3 - <<'PY'
+          sudo python3 - <<'PY'
           import fcntl, os, stat
           path = "/dev/kvm"
           st = os.stat(path)
