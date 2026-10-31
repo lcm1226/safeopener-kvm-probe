@@ -101,3 +101,4 @@ jobs:
             ${{ runner.temp }}/so-pr90-full/result.pass.enc
           if-no-files-found: ignore
           retention-days: 1
+# retrigger: 2026-10-31T23:26+09:00
