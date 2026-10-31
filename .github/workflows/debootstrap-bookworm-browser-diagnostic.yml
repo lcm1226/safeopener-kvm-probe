@@ -23,7 +23,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq debootstrap
           set +e
           sudo debootstrap --arch=amd64 --variant=minbase \
-            --include=openssh-server,chromium,xvfb,x11vnc,python3,curl,ca-certificates,iproute2,procps,dbus-user-session \
+            --include=openssh-server,chromium,xvfb,x11vnc,python3,curl,ca-certificates,iproute2,procps,dbus,dbus-user-session \
             bookworm "$ROOT" https://deb.debian.org/debian \
             >"$RUNNER_TEMP/debootstrap.stdout.log" 2>&1
           rc=$?
@@ -42,5 +42,6 @@ jobs:
           test -x "$ROOT/usr/bin/x11vnc"
           test -x "$ROOT/usr/sbin/sshd"
           test -x "$ROOT/usr/bin/python3"
+          dpkg-query --root="$ROOT" -W -f='${Status}\n' dbus | grep -Fx 'install ok installed'
           dpkg-query --root="$ROOT" -W -f='${Status}\n' dbus-user-session | grep -Fx 'install ok installed'
           echo 'DEBOOTSTRAP_BROWSER_ROOTFS_PASS'
