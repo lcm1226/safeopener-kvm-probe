@@ -1,0 +1,48 @@
+# safeopener-kvm-probe — machine-readable SoT manifest
+version: 1
+repository: lcm1226/safeopener-kvm-probe
+canonical_branch: main
+generated_at: "2026-11-01"
+
+owners:
+  - domain: repository-bootstrap-discovery
+    owner: .sot/bootstrap.yaml
+    authority: discovery
+    lifecycle: stable
+  - domain: sot-map
+    owner: .sot/manifest.yaml
+    authority: machine-readable-index
+    lifecycle: stable
+  - domain: procedure-boundaries
+    owner: AGENTS.md
+    authority: procedural
+    lifecycle: stable
+  - domain: document-authority
+    owner: docs/SOT_INDEX.md
+    authority: index
+    lifecycle: stable
+  - domain: active-state
+    owner: docs/CURRENT_STATE.md
+    authority: live-state
+    lifecycle: volatile
+  - domain: milestone-plan
+    owner: docs/ROADMAP.md
+    authority: plan
+    lifecycle: evolving
+  - domain: session-progress
+    owner: PROGRESS.md
+    authority: worklog
+    lifecycle: volatile
+  - domain: workflow-implementation
+    owner: .github/workflows/
+    authority: implementation
+    lifecycle: active
+  - domain: runtime-exchange
+    owner: exchange/
+    authority: supporting-runtime-evidence
+    lifecycle: volatile
+
+external_authority:
+  safe_opener_repo:
+    repository: lcm1226/safe-opener
+    role: "canonical product/security/contracts/ADR authority; this probe repo must not redefine those semantics"
