@@ -65,18 +65,18 @@ jobs:
           [[ ! -f "$RUN_DIR/artifacts/rootfs.sha256" ]] || cp "$RUN_DIR/artifacts/rootfs.sha256" "$ROOT/result/rootfs.sha256"
           df -h "$RUNNER_TEMP" | tail -1 | awk '{print "diskFree=" $4}' >> "$ROOT/result/summary.txt"
           cat > "$ROOT/coordinator-public.pem" <<'PEM'
------BEGIN PUBLIC KEY-----
-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA2s+XmeHeVtjxfluErLZW
-hFCawOyReUhn9mdR+Kg7bbn9eTqve6+8zR8Sjcy5DIxAnsc37xBtqJg1e90jWFFJ
-/Ew56xCNAcHr1gtZNdKN2js7+kIeVURteHxYbuGWOjK7qaFUp6BKMpVUDbSfhkhH
-i+giHPu5wtmecSQktw0COq9JCsep//zn1NQW5KW+hCXOzARs9R37RRwrGWdvVGVy
-bJ8VvLRXJfa1jJpJZzldkCJ6hRsrilwV60inJM3puNvyrfG9XHNlhsNN14jxdeqE
-cJ37slmsb38oNUQ/2TKEXN48H87atR9WRl4MJ/ZxqxxLql8mHoKOyIvWpgnvZILA
-WpKmYAgb/fuUYwrg+8jQLbXGF2wIQJP87LaWFHGCuEoivtW1ClfoS5ZDHM/ZCYEw
-3V+kYnmgy+gy0dYfTm3fNbF9bHEctnOjR/ygmh2cdMTThKmgv71Dvz3c6AdHvOeq
-wlzqGh2a8rohMcOqJDR1qcwXiTUoNg8LZRMCUw5nc7HlAgMBAAE=
------END PUBLIC KEY-----
-PEM
+          -----BEGIN PUBLIC KEY-----
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA2s+XmeHeVtjxfluErLZW
+          hFCawOyReUhn9mdR+Kg7bbn9eTqve6+8zR8Sjcy5DIxAnsc37xBtqJg1e90jWFFJ
+          /Ew56xCNAcHr1gtZNdKN2js7+kIeVURteHxYbuGWOjK7qaFUp6BKMpVUDbSfhkhH
+          i+giHPu5wtmecSQktw0COq9JCsep//zn1NQW5KW+hCXOzARs9R37RRwrGWdvVGVy
+          bJ8VvLRXJfa1jJpJZzldkCJ6hRsrilwV60inJM3puNvyrfG9XHNlhsNN14jxdeqE
+          cJ37slmsb38oNUQ/2TKEXN48H87atR9WRl4MJ/ZxqxxLql8mHoKOyIvWpgnvZILA
+          WpKmYAgb/fuUYwrg+8jQLbXGF2wIQJP87LaWFHGCuEoivtW1ClfoS5ZDHM/ZCYEw
+          3V+kYnmgy+gy0dYfTm3fNbF9bHEctnOjR/ygmh2cdMTThKmgv71Dvz3c6AdHvOeq
+          wlzqGh2a8rohMcOqJDR1qcwXiTUoNg8LZRMCUw5nc7HlAgMBAAE=
+          -----END PUBLIC KEY-----
+          PEM
           tar -czf "$ROOT/result.tar.gz" -C "$ROOT/result" .
           openssl rand -hex 32 > "$ROOT/result.pass"
           openssl enc -aes-256-cbc -pbkdf2 -pass file:"$ROOT/result.pass" -in "$ROOT/result.tar.gz" -out "$ROOT/result.tar.gz.enc"
