@@ -1,4 +1,5 @@
 name: debootstrap-bookworm-browser-diagnostic
+# bounded rerun: validate PR #90 rootfs repair semantics only
 
 on:
   push:
@@ -47,7 +48,7 @@ jobs:
           dpkg-query --root="$ROOT" -W -f='${Status}\n' dbus-user-session | grep -Fx 'install ok installed'
           echo 'DEBOOTSTRAP_BROWSER_ROOTFS_PASS'
 
-          # The account exists only inside the guest rootfs.  Resolve ownership
+          # The account exists only inside the guest rootfs. Resolve ownership
           # in that namespace rather than asking the GitHub host to know it.
           sudo chroot "$ROOT" useradd -m -d /home/probeuser -s /bin/sh probeuser
           sudo mkdir -p "$ROOT/home/probeuser/browser-profile"
