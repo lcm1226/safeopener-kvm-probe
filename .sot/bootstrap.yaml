@@ -1,0 +1,22 @@
+# safeopener-kvm-probe — bootstrap contract
+# Discovery document only. It maps repository authority; it does not duplicate Safe Opener product semantics.
+
+repository_operating_standard: "safe-opener/sot@1"
+repository: lcm1226/safeopener-kvm-probe
+visibility: public
+canonical_engineering_branch: main
+
+manifest_path: .sot/manifest.yaml
+root_agents_path: AGENTS.md
+sot_index_path: docs/SOT_INDEX.md
+current_state_path: docs/CURRENT_STATE.md
+roadmap_path: docs/ROADMAP.md
+progress_path: PROGRESS.md
+
+# Discovery-only fallback ref. It is not a second semantic authority.
+fixed_fallback_ref: sot/bootstrap
+
+adoption:
+  adopted_at: "2026-11-01"
+  basis: "first-time adoption; no prior probe-repo SoT existed"
+  migration_evidence: "lcm1226/safe-opener:.sot/bootstrap.yaml@ed865d3bb49bac3157ca4eb0523c69ae83753d5f"
