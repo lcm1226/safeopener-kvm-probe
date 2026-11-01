@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Reproduce candidate rootfs dependency closure
+      - name: Reproduce candidate rootfs dependency and guest-ownership closure
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -37,6 +37,7 @@ jobs:
               "$ROOT/debootstrap/debootstrap.log" | tail -n 240 || true
             exit "$rc"
           fi
+
           test -x "$ROOT/usr/bin/chromium"
           test -x "$ROOT/usr/bin/Xvfb"
           test -x "$ROOT/usr/bin/x11vnc"
@@ -45,3 +46,16 @@ jobs:
           dpkg-query --root="$ROOT" -W -f='${Status}\n' dbus | grep -Fx 'install ok installed'
           dpkg-query --root="$ROOT" -W -f='${Status}\n' dbus-user-session | grep -Fx 'install ok installed'
           echo 'DEBOOTSTRAP_BROWSER_ROOTFS_PASS'
+
+          # The account exists only inside the guest rootfs.  Resolve ownership
+          # in that namespace rather than asking the GitHub host to know it.
+          sudo chroot "$ROOT" useradd -m -d /home/probeuser -s /bin/sh probeuser
+          sudo mkdir -p "$ROOT/home/probeuser/browser-profile"
+          sudo chroot "$ROOT" chown -R probeuser:probeuser /home/probeuser
+          guest_uid="$(sudo chroot "$ROOT" id -u probeuser)"
+          guest_gid="$(sudo chroot "$ROOT" id -g probeuser)"
+          actual_uid="$(stat -c '%u' "$ROOT/home/probeuser/browser-profile")"
+          actual_gid="$(stat -c '%g' "$ROOT/home/probeuser/browser-profile")"
+          test "$actual_uid" = "$guest_uid"
+          test "$actual_gid" = "$guest_gid"
+          echo 'CHROOT_GUEST_OWNERSHIP_PASS'
