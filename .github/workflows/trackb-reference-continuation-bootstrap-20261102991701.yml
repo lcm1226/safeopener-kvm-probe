@@ -85,6 +85,26 @@ jobs:
           run_json() {
             curl -fsSL "${h[@]}" "$api/actions/runs/$1"
           }
+          wait_exact_main_kvm_probe() {
+            local runs run_id run_j status conclusion
+            for _ in $(seq 1 180); do
+              runs="$(curl -fsSL "${h[@]}" "$api/actions/workflows/kvm-probe.yml/runs?event=push&branch=main&per_page=30")"
+              run_id="$(jq -r --arg h "$main_sha" '.workflow_runs[] | select(.head_sha==$h) | .id' <<<"$runs" | head -1)"
+              if [[ "$run_id" =~ ^[0-9]+$ ]]; then
+                run_j="$(run_json "$run_id")"
+                status="$(jq -r '.status' <<<"$run_j")"
+                conclusion="$(jq -r '.conclusion // empty' <<<"$run_j")"
+                if [[ "$status" == completed ]]; then
+                  [[ "$conclusion" == success ]] || { echo "EXACT_MAIN_KVM_PROBE_CONCLUSION=$conclusion run=$run_id"; return 1; }
+                  echo "EXACT_MAIN_KVM_PROBE=PASS run=$run_id head=$main_sha"
+                  return 0
+                fi
+              fi
+              sleep 1
+            done
+            echo EXACT_MAIN_KVM_PROBE_TIMEOUT
+            return 1
+          }
           wait_workflow_available() {
             local wf="$1" out code
             out="$(mktemp)"
@@ -101,6 +121,7 @@ jobs:
             return 1
           }
 
+          wait_exact_main_kvm_probe || { echo EXACT_MAIN_KVM_PREFLIGHT_FAILED; exit 121; }
           wait_workflow_available trackb-reference-continuation-source.yml || { echo CONTINUATION_SOURCE_WORKFLOW_UNAVAILABLE; exit 119; }
           wait_workflow_available trackb-reference-continuation-controller.yml || { echo CONTINUATION_CONTROLLER_WORKFLOW_UNAVAILABLE; exit 120; }
           echo "CONTINUATION_WORKFLOWS_AVAILABLE=PASS"
