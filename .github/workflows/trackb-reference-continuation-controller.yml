@@ -196,7 +196,7 @@ jobs:
           before_replacement="$(mktemp)"
           workflow_dispatch_ids kvm-probe.yml > "$before_replacement"
           dispatch_body='{"ref":"main"}'
-          code="$(curl -sS -o "$RUNNER_TEMP/replacement-dispatch.out" -w '%{http_code}' -X POST "${h[@]}" "$api/actions/workflows/kvm-probe.yml/dispatches" -d "$dispatch_body")"
+          code="$(curl -sS -o "$RUNNER_TEMP/replacement-dispatch.out" -w '%{http_code}' -X POST "${h[@]}"             "$api/actions/workflows/kvm-probe.yml/dispatches" -d "$dispatch_body")"
           [[ "$code" == 204 ]] || { cat "$RUNNER_TEMP/replacement-dispatch.out"; echo "REPLACEMENT_DISPATCH_HTTP=$code"; exit 93; }
           replacement_run_id="$(find_new_run kvm-probe.yml "$before_replacement")" || { echo REPLACEMENT_RUN_NOT_FOUND; exit 94; }
           replacement_j="$(run_json "$replacement_run_id")"
@@ -229,9 +229,9 @@ jobs:
           result="$(jq -nc \
             --arg c "$CAMPAIGN_ID" --arg bc "$BASE_CAMPAIGN_ID" --arg br "$BASE_SOURCE_RUN_ID" --arg h "$PROOF_HEAD" --arg a "$ATTESTATION_SHA256" --arg p "$PROBE_REPO_HEAD" \
             --arg cr "$GITHUB_RUN_ID" --arg sr "$SOURCE_RUN_ID" --arg or "$OBSERVER_RUN_ID" --arg rr "$replacement_run_id" \
-            --arg authority github-actions-control-plane --arg quarantineBasis github-force-cancel-terminal --arg refusalBasis terminal-host-cannot-serve --arg siblingLossBasis terminal-host-plus-observer-cut \
+            --arg authority github-actions-control-plane --arg quarantineBasis github-force-cancel-terminal --arg refusalBasis terminal-host-cannot-serve --arg siblingLossBasis terminal-host-plus-observer-cut --arg cleanupBasis github-hosted-ephemeral-runner-terminal \
             --argjson revokeRequested "$revoke_requested_ms" --argjson revokeAccepted "$revoke_accepted_ms" --argjson cutObserved "$cut_observed_ms" --argjson revokeToCut "$revoke_to_cut_ms" \
             --argjson sourceTerminal "$source_terminal_observed_ms" --argjson replacementReady "$replacement_ready_ms" --argjson rotation "$rotation_ms" --argjson canonicalPatch "$canonical_patch" \
-            '{schemaVersion:1,campaignId:$c,baseCampaignId:$bc,baseSourceRunId:$br,proofHead:$h,attestationSha256:$a,probeRepoHead:$p,controllerRunId:$cr,sourceRunId:$sr,observerRunId:$or,replacementRunId:$rr,providerAuthority:$authority,sourceQuarantineBasis:$quarantineBasis,sourceRefusalBasis:$refusalBasis,siblingLossBasis:$siblingLossBasis,revokeRequestedAtMs:$revokeRequested,revokeAcceptedAtMs:$revokeAccepted,cutObservedAtMs:$cutObserved,revokeToCutMs:$revokeToCut,forceCancelAccepted:true,existingFlowCutObserved:true,sourceRunCancelled:true,sourceTerminalObservedAtMs:$sourceTerminal,observerRunSucceeded:true,replacementKvmWorkflowSucceeded:true,replacementReadyObservedAtMs:$replacementReady,rotationMs:$rotation,rotationCostUsd:0,rotationCostSourceId:"github-public-standard-runner-zero-charge",canonicalPatch:$canonicalPatch}')"
+            '{schemaVersion:1,campaignId:$c,baseCampaignId:$bc,baseSourceRunId:$br,proofHead:$h,attestationSha256:$a,probeRepoHead:$p,controllerRunId:$cr,sourceRunId:$sr,observerRunId:$or,replacementRunId:$rr,providerAuthority:$authority,sourceQuarantineBasis:$quarantineBasis,sourceRefusalBasis:$refusalBasis,siblingLossBasis:$siblingLossBasis,continuationCleanupZero:true,continuationCleanupBasis:$cleanupBasis,revokeRequestedAtMs:$revokeRequested,revokeAcceptedAtMs:$revokeAccepted,cutObservedAtMs:$cutObserved,revokeToCutMs:$revokeToCut,forceCancelAccepted:true,existingFlowCutObserved:true,sourceRunCancelled:true,sourceTerminalObservedAtMs:$sourceTerminal,observerRunSucceeded:true,replacementKvmWorkflowSucceeded:true,replacementReadyObservedAtMs:$replacementReady,rotationMs:$rotation,rotationCostUsd:0,rotationCostSourceId:"github-public-standard-runner-zero-charge",canonicalPatch:$canonicalPatch}')"
           put_state trackb-ref-continuation-controller-result "$result"
           echo "TRACKB_REFERENCE_CONTINUATION_CONTROLLER_EVIDENCE=PASS"
