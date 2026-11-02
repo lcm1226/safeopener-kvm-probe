@@ -1,0 +1,48 @@
+name: relay-upload-41406328470
+
+on:
+  push:
+    branches: [runtime-state]
+    paths:
+      - .github/workflows/relay-upload-41406328470.yml
+
+permissions:
+  contents: write
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish exact encrypted relay files fail-closed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: "41406328470"
+          CAMPAIGN_ID: "20261102162500"
+          EXPECTED_ATTESTATION: "a75e6e95d55f4eef520ada8be2f2912f2b50cef14a480767a5a941e7f11533c5"
+          PACKAGE_URL: "https://sdmntprindiasocentral.oaiusercontent.com/files/00000000-35a8-8211-9dc1-f2fe5e0dee5c/raw?se=2026-11-02T07%3A32%3A56Z&sp=r&sv=2026-02-06&sr=b&scid=1853a195-e5c5-5a8e-b0e1-4263d13e5d96&skoid=9063adf3-a524-4acf-b70a-8731b33f2f50&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-11-01T22%3A40%3A15Z&ske=2026-11-02T22%3A40%3A15Z&sks=b&skv=2026-02-06&sig=tGHeF6njb02g0qZuCc2DW5QbMbY1RDc0v5KHhxrF5u4%3D"
+        run: |
+          set -Eeuo pipefail
+          api="https://api.github.com/repos/$REPO"
+          h=(-H 'Accept: application/vnd.github+json' -H "Authorization: Bearer $GH_TOKEN" -H 'X-GitHub-Api-Version: 2022-11-28')
+          tmp="$RUNNER_TEMP/relay-package.zip"
+          dir="$RUNNER_TEMP/relay-package"
+          mkdir -p "$dir"
+          curl -fL --retry 2 --connect-timeout 10 "$PACKAGE_URL" -o "$tmp"
+          unzip -q "$tmp" -d "$dir"
+          for f in relay.tar.gz.enc.b64 relay.pass.enc.b64 attestation-sha256.txt campaign-sha256.txt proxy-sha256.txt source-run-id.txt campaign-id.txt; do test -s "$dir/$f"; done
+          [[ "$(cat "$dir/source-run-id.txt")" == "$RUN_ID" ]]
+          [[ "$(cat "$dir/campaign-id.txt")" == "$CAMPAIGN_ID" ]]
+          [[ "$(cat "$dir/attestation-sha256.txt")" == "$EXPECTED_ATTESTATION" ]]
+          for f in relay.tar.gz.enc.b64 relay.pass.enc.b64; do
+            path="exchange/$RUN_ID/$f"
+            code="$(curl -sS -o "$RUNNER_TEMP/get.out" -w '%{http_code}' "${h[@]}" "$api/contents/$path?ref=runtime-state")"
+            [[ "$code" == 404 ]] || { echo "RELAY_COLLISION path=$path code=$code"; exit 70; }
+            encoded="$(base64 -w0 "$dir/$f")"
+            body="$(jq -nc --arg m "relay: publish encrypted third-run $RUN_ID $f" --arg c "$encoded" --arg b runtime-state '{message:$m,content:$c,branch:$b}')"
+            code="$(curl -sS -o "$RUNNER_TEMP/put.out" -w '%{http_code}' -X PUT "${h[@]}" "$api/contents/$path" -d "$body")"
+            [[ "$code" == 201 ]] || { cat "$RUNNER_TEMP/put.out"; exit 71; }
+          done
+          echo "RELAY_CIPHERTEXT_PUBLISH=PASS run=$RUN_ID campaign=$CAMPAIGN_ID"
