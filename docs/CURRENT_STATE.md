@@ -1,6 +1,13 @@
 # CURRENT_STATE
 
-Status: TRACKB_REFERENCE_CONTINUATION_FAILED
+Status: TRACKB_REFERENCE_COMPLETE_SUPPORTING_EVIDENCE
+
+## 2026-11-02 — third exact-head Track B reference campaign completed successfully
+- A third and final execution authorized by the active bounded transaction completed as campaign `20261102162500` on public probe `main@80543b367c1cd4c58eba4d197462f84b970d4219`, bound to canonical Safe Opener proof head `d11d2881324e3c7f0b5714c90580129ca88ddaa2` and local-attestation SHA-256 `a75e6e95d55f4eef520ada8be2f2912f2b50cef14a480767a5a941e7f11533c5`.
+- Exact-main KVM capability run `41406289774` passed before bootstrap dispatch. Bootstrap `41406289723`, observer `41406312148`, source `41406328470`, controller `41407138359`, and replacement KVM run `41407170369` are exact-bound supporting execution evidence.
+- The source produced a real KVM base observation with Firecracker boot/snapshot/restore, real-browser fresh-session separation, bounded packing/BOM, controlled stream-ready timing, and the real-worker R4/R5 external matrix. The observer independently recorded an established flow and later the host-external cut.
+- Controller evidence records `revokeToCutMs=4850`, source terminal cancellation, observer success, replacement KVM health, `rotationMs=22566`, and measured incremental rotation cost `$0` with provenance `github-public-standard-runner-zero-charge`. A final exact-bound combined observation was written to `runtime-state`.
+- Canonical private reduction/review is owned by `lcm1226/safe-opener`; this public repository does not promote proof rows or ADR status. No fourth KVM_REFERENCE execution is authorized. Historical runtime/exchange evidence remains supporting audit evidence and must not be reused as a fresh run.
 
 ## Repository identity
 - Repository: `lcm1226/safeopener-kvm-probe`

@@ -47,3 +47,11 @@
 - No Track B proof row, composite R4/R5 row, ADR-010 acceptance, provider selection, or production rollout is promoted. Incremental provider cost remains `$0` and no paid-provider/payment mutation occurred.
 - The temporary continuation bootstrap/source/controller workflows are removed by the failure-convergence cleanup. The historical `runtime-state` records remain preserved as audit evidence and must not be reused as a fresh run.
 - During cleanup coordination, two accidental empty-file add/revert pairs briefly advanced public `main`; both were immediately reverted without force-push/amend. The resulting canonical tree returned exactly to PR #8 tree `07f73b244d351d14651d443a5e719bccc3610268`, so no lasting file-content or workflow-semantic delta remained from those incidents.
+
+## 2026-11-02 — third exact-head Track B reference campaign completed
+- Campaign `20261102162500` executed on public probe `main@80543b367c1cd4c58eba4d197462f84b970d4219`, bound to Safe Opener `d11d2881324e3c7f0b5714c90580129ca88ddaa2` and attestation SHA-256 `a75e6e95d55f4eef520ada8be2f2912f2b50cef14a480767a5a941e7f11533c5`.
+- Relay-only preflight had already proved deterministic encrypted delivery before this KVM run. The third source relay was published to exact source run `41406328470` without moving public `main`; source decryption/exact binding succeeded.
+- Base observation completed with boot-to-ready 2204 ms, restore-to-ready 374 ms, real-browser residue absent, stream-ready 5754 ms, packing cap 1 on 4 vCPU / 15983 MiB with measured headroom, full bounded R4 egress observations, and bounded R5 lifecycle observations.
+- Observer established two qualifying pulses before controller action and later recorded the established-flow cut. Controller `41407138359` succeeded with revoke-to-cut 4850 ms, source terminal cancellation, observer success, replacement KVM health, rotation 22566 ms, and measured incremental rotation cost `$0`.
+- Bootstrap `41406289723` mechanically assembled `trackb-ref-combined-observation-20261102162500.json` and completed successfully.
+- Three external Track B attempts are now consumed in total. No fourth KVM_REFERENCE attempt is authorized. No proof/ADR promotion, provider/payment mutation, production rollout, or runtime-evidence deletion occurred in this public repository.
