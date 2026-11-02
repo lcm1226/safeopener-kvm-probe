@@ -65,6 +65,34 @@ jobs:
           [[ "$ATTESTATION_SHA256_INPUT" =~ ^[0-9a-f]{64}$ ]]
           [[ "$OBSERVER_HOST" == bore.pub ]]
           [[ "$OBSERVER_PORT" =~ ^[0-9]+$ ]] && (( OBSERVER_PORT >= 1024 && OBSERVER_PORT <= 65535 ))
+          OBSERVER_IP="$(OBSERVER_HOST="$OBSERVER_HOST" OBSERVER_PORT="$OBSERVER_PORT" python3 - <<'PY'
+          import ipaddress, os, socket
+          host = os.environ['OBSERVER_HOST']
+          port = int(os.environ['OBSERVER_PORT'])
+          seen = set()
+          for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM):
+              ip = sockaddr[0]
+              if ip in seen:
+                  continue
+              seen.add(ip)
+              try:
+                  address = ipaddress.ip_address(ip)
+              except ValueError:
+                  continue
+              if address.version != 4 or not address.is_global:
+                  continue
+              try:
+                  with socket.create_connection((ip, port), timeout=10) as connection:
+                      connection.sendall(b'preflight\n')
+                  print(ip)
+                  raise SystemExit(0)
+              except OSError:
+                  continue
+          raise SystemExit(1)
+          PY
+          )" || { echo OBSERVER_GLOBAL_IPV4_PREFLIGHT_FAILED; exit 69; }
+          [[ "$OBSERVER_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "OBSERVER_GLOBAL_IPV4_PREFLIGHT=PASS host=$OBSERVER_HOST ip=$OBSERVER_IP port=$OBSERVER_PORT"
 
           ROOT="$RUNNER_TEMP/trackb-reference"
           BASE="https://raw.githubusercontent.com/${REPO}/runtime-state/exchange/${GITHUB_RUN_ID}"
@@ -123,7 +151,7 @@ jobs:
 
           BLAST_RUN="$ROOT/blast-campaign"
           SO_TRACKB_PROOF_HEAD="$PROOF_HEAD" SO_TRACKB_ALLOW_HOST_APT=1 SO_TRACKB_PACK_MAX=1 SO_TRACKB_RUN_DIR="$BLAST_RUN" \
-          SO_TRACKB_BLAST_OBSERVER_IP="$OBSERVER_HOST" SO_TRACKB_BLAST_OBSERVER_PORT="$OBSERVER_PORT" SO_TRACKB_BLAST_DURATION_SECONDS=1500 \
+          SO_TRACKB_BLAST_OBSERVER_IP="$OBSERVER_IP" SO_TRACKB_BLAST_OBSERVER_PORT="$OBSERVER_PORT" SO_TRACKB_BLAST_DURATION_SECONDS=300 \
             bash ./trackb-firecracker-campaign.sh blast-hold >"$ROOT/blast.log" 2>&1 &
           blast_pid=$!
           armed=0
@@ -134,7 +162,7 @@ jobs:
           done
           [[ "$armed" == 1 ]] || exit 73
           armed_ms="$(date +%s%3N)"
-          armed_payload="$(jq -nc --arg c "$CAMPAIGN_ID" --arg r "$GITHUB_RUN_ID" --arg h "$PROOF_HEAD" --arg a "$ATTESTATION_SHA256" --arg host "$OBSERVER_HOST" --argjson port "$OBSERVER_PORT" --argjson ts "$armed_ms" '{schemaVersion:1,campaignId:$c,sourceRunId:$r,proofHead:$h,attestationSha256:$a,observerHost:$host,observerPort:$port,blastArmedAtMs:$ts,perSessionCutConfirmed:true,siblingSurvivedSessionCut:true,pulseEstablished:true}')"
+          armed_payload="$(jq -nc --arg c "$CAMPAIGN_ID" --arg r "$GITHUB_RUN_ID" --arg h "$PROOF_HEAD" --arg a "$ATTESTATION_SHA256" --arg host "$OBSERVER_HOST" --arg ip "$OBSERVER_IP" --argjson port "$OBSERVER_PORT" --argjson ts "$armed_ms" '{schemaVersion:1,campaignId:$c,sourceRunId:$r,proofHead:$h,attestationSha256:$a,observerHost:$host,observerIp:$ip,observerPort:$port,blastArmedAtMs:$ts,perSessionCutConfirmed:true,siblingSurvivedSessionCut:true,pulseEstablished:true}')"
           put_state trackb-ref-source-armed "$armed_payload"
           echo "BLAST_ARMED_STATE_PUBLISHED=PASS"
 
