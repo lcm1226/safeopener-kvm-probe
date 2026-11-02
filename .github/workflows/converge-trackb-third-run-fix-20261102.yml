@@ -1,0 +1,53 @@
+name: converge-trackb-third-run-fix-20261102
+
+on:
+  push:
+    branches:
+      - docs/trackb-third-run-convergence-20261102
+    paths:
+      - .github/workflows/converge-trackb-third-run-fix-20261102.yml
+
+permissions:
+  contents: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: docs/trackb-third-run-convergence-20261102
+          fetch-depth: 0
+      - name: Converge public supporting SoT and remove one-shot bootstrap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          state = Path('docs/CURRENT_STATE.md')
+          text = state.read_text()
+          old = 'Status: TRACKB_REFERENCE_CONTINUATION_FAILED'
+          if old not in text:
+              raise SystemExit('CURRENT_STATE_STATUS_DRIFT')
+          text = text.replace(old, 'Status: TRACKB_REFERENCE_COMPLETE_SUPPORTING_EVIDENCE', 1)
+          anchor = 'Status: TRACKB_REFERENCE_COMPLETE_SUPPORTING_EVIDENCE\n'
+          section = '''\n## 2026-11-02 — third exact-head Track B reference campaign completed successfully\n- A third and final execution authorized by the active bounded transaction completed as campaign `20261102162500` on public probe `main@80543b367c1cd4c58eba4d197462f84b970d4219`, bound to canonical Safe Opener proof head `d11d2881324e3c7f0b5714c90580129ca88ddaa2` and local-attestation SHA-256 `a75e6e95d55f4eef520ada8be2f2912f2b50cef14a480767a5a941e7f11533c5`.\n- Exact-main KVM capability run `41406289774` passed before bootstrap dispatch. Bootstrap `41406289723`, observer `41406312148`, source `41406328470`, controller `41407138359`, and replacement KVM run `41407170369` are exact-bound supporting execution evidence.\n- The source produced a real KVM base observation with Firecracker boot/snapshot/restore, real-browser fresh-session separation, bounded packing/BOM, controlled stream-ready timing, and the real-worker R4/R5 external matrix. The observer independently recorded an established flow and later the host-external cut.\n- Controller evidence records `revokeToCutMs=4850`, source terminal cancellation, observer success, replacement KVM health, `rotationMs=22566`, and measured incremental rotation cost `$0` with provenance `github-public-standard-runner-zero-charge`. A final exact-bound combined observation was written to `runtime-state`.\n- Canonical private reduction/review is owned by `lcm1226/safe-opener`; this public repository does not promote proof rows or ADR status. No fourth KVM_REFERENCE execution is authorized. Historical runtime/exchange evidence remains supporting audit evidence and must not be reused as a fresh run.\n'''
+          text = text.replace(anchor, anchor + section, 1)
+          state.write_text(text)
+
+          progress = Path('PROGRESS.md')
+          p = progress.read_text().rstrip() + '''\n\n## 2026-11-02 — third exact-head Track B reference campaign completed\n- Campaign `20261102162500` executed on public probe `main@80543b367c1cd4c58eba4d197462f84b970d4219`, bound to Safe Opener `d11d2881324e3c7f0b5714c90580129ca88ddaa2` and attestation SHA-256 `a75e6e95d55f4eef520ada8be2f2912f2b50cef14a480767a5a941e7f11533c5`.\n- Relay-only preflight had already proved deterministic encrypted delivery before this KVM run. The third source relay was published to exact source run `41406328470` without moving public `main`; source decryption/exact binding succeeded.\n- Base observation completed with boot-to-ready 2204 ms, restore-to-ready 374 ms, real-browser residue absent, stream-ready 5754 ms, packing cap 1 on 4 vCPU / 15983 MiB with measured headroom, full bounded R4 egress observations, and bounded R5 lifecycle observations.\n- Observer established two qualifying pulses before controller action and later recorded the established-flow cut. Controller `41407138359` succeeded with revoke-to-cut 4850 ms, source terminal cancellation, observer success, replacement KVM health, rotation 22566 ms, and measured incremental rotation cost `$0`.\n- Bootstrap `41406289723` mechanically assembled `trackb-ref-combined-observation-20261102162500.json` and completed successfully.\n- Three external Track B attempts are now consumed in total. No fourth KVM_REFERENCE attempt is authorized. No proof/ADR promotion, provider/payment mutation, production rollout, or runtime-evidence deletion occurred in this public repository.\n'''
+          progress.write_text(p.rstrip() + '\n')
+
+          Path('docs/ROADMAP.md').write_text('''# ROADMAP\n\nOwner of: future work on the public Safe Opener probe/execution surface. Canonical Safe Opener product/security/contracts/ADR/acceptance semantics remain in `lcm1226/safe-opener`.\n\n## Current state\n- First-time ROS adoption and public Track B execution-surface setup are complete.\n- Three bounded external Track B attempts have been consumed. The third exact-head campaign `20261102162500` completed successfully and produced the final combined supporting observation.\n- No fourth KVM_REFERENCE execution is authorized. Historical `runtime-state` / `exchange` material is audit evidence only and must not be reused as a fresh execution.\n\n## Next work\n1. Keep the public repository as a supporting probe/evidence surface; do not redefine or promote canonical Safe Opener proof or ADR semantics here.\n2. Preserve the successful third-run runtime evidence and exact run/head bindings for canonical private review.\n3. Remove one-shot execution helpers after use while retaining standing reusable probe workflows and historical evidence.\n4. Any future KVM/provider execution requires a new repository-first rehydration, exact lease, and fresh explicit authorization.\n\n## Stop conditions\nStop on moved refs, bootstrap/authority conflict, unverifiable dependency, non-zero incremental cost or payment requirement, scope expansion, loss of exact commit/run binding, or any request to promote canonical proof/ADR state from this public repository.\n''')
+          PY
+          rm -f .github/workflows/trackb-reference-bootstrap-20261102162500.yml
+          rm -f .github/workflows/converge-trackb-third-run-20261102.yml
+          rm -f .github/workflows/converge-trackb-third-run-fix-20261102.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs(trackb): converge successful third reference campaign'
+          git push origin HEAD:docs/trackb-third-run-convergence-20261102
