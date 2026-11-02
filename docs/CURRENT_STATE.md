@@ -38,7 +38,7 @@ This repository is a public supporting probe/execution surface for Safe Opener. 
 - The continuation source generated and uploaded its one-time public relay key, but the required encrypted relay ciphertext was never published to `runtime-state/exchange/41394356630/`. The source observed repeated HTTP 404 responses and terminated with `RELAY_WAIT_TIMEOUT` / exit `70` after the bounded wait.
 - Because relay decryption never occurred, no `trackb-ref-continuation-base`, `trackb-ref-continuation-armed`, controller result, or combined observation state exists. Canonical `blast-hold` did not start and the continuation controller was never dispatched.
 - The bootstrap therefore failed closed with `SOURCE_PREARM_CONCLUSION=failure` / exit `111`.
-- The observer run `41394341794` had no qualifying pulse flow because the source never armed. At the start of this cleanup convergence it remained live; its terminal status must be re-read before cleanup is called complete.
+- Observer run `41394341794` completed with conclusion `failure` and exit `25` after its 30-minute bounded established-flow wait expired without two qualifying pulses. Its job cleanup then terminated the observer/bore orphan processes. No observer-established or observer-cut state was emitted.
 - The separately authorized corrective KVM_REFERENCE attempt is consumed. Together with the first attempt, two external Track B execution attempts have occurred. No third KVM_REFERENCE attempt is authorized by the current task.
 
 ## Proof / acceptance state
